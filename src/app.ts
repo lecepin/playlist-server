@@ -1,4 +1,5 @@
 import express, { Request, Response } from "express";
+import cors from "cors";
 import db from "./database";
 
 interface Playlist {
@@ -15,6 +16,8 @@ interface Video {
 
 const app = express();
 app.use(express.json());
+app.use("/public", express.static("public"));
+app.use(cors());
 
 // 添加新视频
 app.post("/videos", (req: Request, res: Response) => {
@@ -63,35 +66,54 @@ app.post("/playlists", (req: Request, res: Response) => {
 });
 
 // 将视频添加到播放列表
-app.post("/playlists/:playlistId/videos", (req: Request, res: Response) => {
-  const { playlistId } = req.params;
-  const { videoName } = req.body;
+app.post(
+  "/playlists/:playlistId/videos/:videoName",
+  (req: Request, res: Response) => {
+    const { playlistId, videoName } = req.params;
 
-  // 查询当前播放列表中最大的 position 值
-  db.get(
-    `SELECT MAX(position) as maxPosition FROM playlist_videos WHERE playlist_id = ?`,
-    [playlistId],
-    (err, row: any) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-
-      // 如果没有视频，maxPosition 为 null，设置为 0
-      const newPosition = (row?.maxPosition ?? 0) + 1;
-
-      // 插入新的视频记录
-      db.run(
-        `INSERT INTO playlist_videos (playlist_id, video_name, position) VALUES (?, ?, ?)`,
-        [playlistId, videoName, newPosition],
-        function (err) {
-          if (err) {
-            return res.status(500).json({ error: err.message });
-          }
-          res.json({ id: this.lastID });
+    // 查询当前播放列表中最大的 position 值
+    db.get(
+      `SELECT MAX(position) as maxPosition FROM playlist_videos WHERE playlist_id = ?`,
+      [playlistId],
+      (err, row: any) => {
+        if (err) {
+          return res.status(500).json({ error: err.message });
         }
-      );
+
+        // 如果没有视频，maxPosition 为 null，设置为 0
+        const newPosition = (row?.maxPosition ?? 0) + 1;
+
+        // 插入新的视频记录
+        db.run(
+          `INSERT INTO playlist_videos (playlist_id, video_name, position) VALUES (?, ?, ?)`,
+          [playlistId, videoName, newPosition],
+          function (err) {
+            if (err) {
+              return res.status(500).json({ error: err.message });
+            }
+            res.json({ id: this.lastID });
+          }
+        );
+      }
+    );
+  }
+);
+
+// 将视频从播放列表中移除
+app.delete("/playlists/:playlistId/videos/:videoName", (req, res) => {
+  const { playlistId, videoName } = req.params;
+
+  const query = `
+    DELETE FROM playlist_videos 
+    WHERE playlist_id = ? AND video_name = ?
+  `;
+
+  db.run(query, [playlistId, videoName], function (err) {
+    if (err) {
+      return res.status(500).json({ error: err.message });
     }
-  );
+    res.json({ message: "Video removed from playlist" });
+  });
 });
 
 // 删除视频
@@ -169,11 +191,66 @@ app.post(
 
 // 获取所有视频
 app.get("/videos", (req: Request, res: Response) => {
-  db.all(`SELECT name, url, description FROM videos`, (err, rows: Video[]) => {
+  const { listId } = req.query;
+
+  let query = `
+    SELECT 
+      videos.name, 
+      videos.url, 
+      videos.description, 
+      COALESCE(
+        json_group_array(
+          CASE 
+            WHEN playlists.id IS NOT NULL THEN
+              json_object(
+                'id', playlists.id,
+                'name', playlists.name,
+                'description', playlists.description
+              )
+            ELSE
+              NULL
+          END
+        ),
+        '[]'
+      ) AS lists
+    FROM 
+      videos
+    LEFT JOIN 
+      playlist_videos ON videos.name = playlist_videos.video_name
+    LEFT JOIN 
+      playlists ON playlist_videos.playlist_id = playlists.id
+  `;
+
+  if (listId) {
+    query += `WHERE playlists.id = ? `;
+  }
+
+  query += `
+    GROUP BY videos.name
+  `;
+
+  if (listId) {
+    query += `
+      ORDER BY playlist_videos.position ASC
+    `;
+  }
+
+  db.all(query, listId ? [listId] : [], (err, rows) => {
     if (err) {
       return res.status(500).json({ error: err.message });
     }
-    res.json(rows);
+
+    res.json(
+      rows.map((row: any) => {
+        if (row.lists === "[null]") {
+          row.lists = "[]";
+        }
+
+        row.lists = JSON.parse(row.lists);
+
+        return row;
+      })
+    );
   });
 });
 
