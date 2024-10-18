@@ -49,17 +49,21 @@ function getVideoFilesFromDir(
   return scanDirectory(startDir, startDir);
 }
 
-// Example usage:
 const videos = getVideoFilesFromDir("public");
 console.log("Video files:", videos);
 
-videos.forEach((item) => {
-  axios
-    .post("http://localhost:3000/videos", {
-      name: item.filename,
-      url: `/public/${item.path}`,
-    })
-    .then((res) => {
-      console.log(res.data);
-    });
+videos.forEach((item, index) => {
+  setTimeout(() => {
+    axios
+      .post("http://localhost:3000/videos", {
+        name: item.filename,
+        url: `/public/${item.path}`,
+      })
+      .then((res) => {
+        console.log("Success:", item);
+      })
+      .catch((err) => {
+        console.log("Err:", err.response.data, item);
+      });
+  }, index * 100);
 });
